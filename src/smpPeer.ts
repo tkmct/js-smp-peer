@@ -12,21 +12,34 @@ import {
 } from './exceptions';
 
 const timeSleep = 10;
-const defaultTimeout = 30000; // 30 seconds
+const defaultTimeout = 60000; // 60s
 
-function createConnDataHandler(
-  stateMachine: SMPStateMachine,
-  conn: Peer.DataConnection
-) {
-  return (data: ArrayBuffer) => {
-    const tlv = TLV.deserialize(new Uint8Array(data));
-    const replyTLV = stateMachine.transit(tlv);
-    if (replyTLV === null) {
-      return;
-    }
-    conn.send(replyTLV.serialize());
-  };
+/* Message */
+enum MessageType {
+  AmountReq,
+  AmountRes,
+  SMP,
 }
+
+type Message = {
+  type: MessageType;
+  msg: any;
+};
+
+const smpMessage = (msg: Uint8Array) => ({
+  type: MessageType.SMP,
+  msg,
+});
+
+const amountReqMessage = (msg: number) => ({
+  type: MessageType.AmountReq,
+  msg,
+});
+
+const amountResMessage = (msg: number) => ({
+  type: MessageType.AmountRes,
+  msg,
+});
 
 /* Utility functions */
 
@@ -80,7 +93,11 @@ type TSMPPeerEvent =
 type TCBServerConnected = () => void;
 type TCBServerDisconnected = () => void;
 type TCBError = (error: string) => void;
-type TCBIncomingSMP = (remotePeerID: string, result: boolean) => void;
+type TCBIncomingSMP = (
+  remotePeerID: string,
+  result: boolean,
+  negotiatedAmount: number
+) => void;
 type TCBSMPPeer =
   | TCBServerConnected
   | TCBServerDisconnected
@@ -89,6 +106,7 @@ type TCBSMPPeer =
 
 class SMPPeer {
   secret: string;
+  negotiatedAmount: number | null = null;
 
   cbServerConnected?: TCBServerConnected;
   cbServerDisconnected?: TCBServerDisconnected;
@@ -106,6 +124,7 @@ class SMPPeer {
    */
   constructor(
     secret: string,
+    readonly amount: number,
     readonly localPeerID?: string,
     readonly peerServerConfig: TPeerServerConfig = defaultPeerServerConfig,
     readonly timeout: number = defaultTimeout
@@ -128,6 +147,27 @@ class SMPPeer {
       );
     }
     return this.peer.id;
+  }
+
+  createConnDataHandler(
+    stateMachine: SMPStateMachine,
+    conn: Peer.DataConnection
+  ) {
+    return (data: Message) => {
+      if (data.type === MessageType.SMP) {
+        const tlv = TLV.deserialize(new Uint8Array(data.msg));
+        const replyTLV = stateMachine.transit(tlv);
+        if (replyTLV === null) {
+          return;
+        }
+        conn.send(smpMessage(replyTLV.serialize()));
+      } else if (data.type === MessageType.AmountReq) {
+        conn.send(amountResMessage(this.amount));
+        this.negotiatedAmount = Math.min(this.amount, data.msg);
+      } else if (data.type === MessageType.AmountRes) {
+        this.negotiatedAmount = Math.min(this.amount, data.msg);
+      }
+    };
   }
 
   /**
@@ -159,7 +199,7 @@ class SMPPeer {
       // Ref: https://peerjs.com/docs.html#dataconnection
       conn.on('open', async () => {
         const stateMachine = new SMPStateMachine(this.secret);
-        conn.on('data', createConnDataHandler(stateMachine, conn));
+        conn.on('data', this.createConnDataHandler(stateMachine, conn));
         try {
           await waitUntilStateMachineFinishedOrTimeout(
             stateMachine,
@@ -172,9 +212,16 @@ class SMPPeer {
           return;
         }
         const result = stateMachine.getResult();
-        console.debug(`Finished SMP with peer=${conn.peer}: result=${result}`);
+        console.debug(
+          `Finished SMP with peer=${conn.peer}: result=${result}, negotiatedAmount=${this.negotiatedAmount}`
+        );
         if (this.cbIncomingSMP !== undefined) {
-          this.cbIncomingSMP(conn.peer, result);
+          this.cbIncomingSMP(
+            conn.peer,
+            result,
+            result ? (this.negotiatedAmount as number) : 0
+          );
+          this.negotiatedAmount = null;
         }
       });
     });
@@ -210,7 +257,9 @@ class SMPPeer {
    * @returns The result of SMP protocol, i.e. our secret is the same as the secret of the
    *  remote peer.
    */
-  async runSMP(remotePeerID: string): Promise<boolean> {
+  async runSMP(
+    remotePeerID: string
+  ): Promise<{ result: boolean; negotiatedAmount: number }> {
     if (this.peer === undefined) {
       throw new ServerUnconnected(
         'need to be connected to a peer server to discover other peers'
@@ -221,16 +270,27 @@ class SMPPeer {
     const stateMachine = new SMPStateMachine(this.secret);
     conn.on('open', async () => {
       console.debug(`Connection to ${conn.peer} is ready.`);
+
       const firstMsg = stateMachine.transit(null);
       // Sanity check
       if (firstMsg === null) {
         throw new Error('msg1 should not be null');
       }
-      conn.on('data', createConnDataHandler(stateMachine, conn));
-      conn.send(firstMsg.serialize());
+      conn.on('data', this.createConnDataHandler(stateMachine, conn));
+
+      // amount negotiation
+      conn.send(amountReqMessage(this.amount));
+      conn.send(smpMessage(firstMsg.serialize()));
     });
     await waitUntilStateMachineFinishedOrTimeout(stateMachine, this.timeout);
-    return stateMachine.getResult();
+    const result = stateMachine.getResult();
+    const answer = {
+      result,
+      negotiatedAmount: result ? (this.negotiatedAmount as number) : 0,
+    };
+    this.negotiatedAmount = null;
+
+    return answer;
   }
 
   /**

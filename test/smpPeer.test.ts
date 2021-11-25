@@ -47,9 +47,10 @@ afterEach(() => {
 describe('connectToPeerServer', () => {
   const secret = '123';
   const pid = 'pid';
+  const amount = 100;
 
   test('succeeds', async () => {
-    const peer = new SMPPeer(secret, pid);
+    const peer = new SMPPeer(secret, amount, pid);
     // Register callbacks
     let isConnectedCalled = false;
     peer.on('connected', () => {
@@ -62,7 +63,7 @@ describe('connectToPeerServer', () => {
   test('fails when the peer server returns a different peer id', async () => {
     mockPeerClass = MockPeerWrongID;
 
-    const peer = new SMPPeer(secret, pid);
+    const peer = new SMPPeer(secret, amount, pid);
     await expect(peer.connectToPeerServer()).rejects.toThrowError(ServerFault);
   });
 });
@@ -70,11 +71,12 @@ describe('connectToPeerServer', () => {
 describe('error callback', () => {
   const secret = '123';
   const pid = 'pid';
+  const amount = 100;
 
   test('An error is emitted when peerjs does so', async () => {
     mockPeerClass = MockPeerErrorWhenRegiser;
 
-    const peer = new SMPPeer(secret, pid);
+    const peer = new SMPPeer(secret, amount, pid);
     let isErrorCalled = false;
     peer.on('error', (error: string) => {
       isErrorCalled = true;
@@ -87,9 +89,10 @@ describe('error callback', () => {
 describe('disconnect', () => {
   const secret = '123';
   const pid = 'pid';
+  const amount = 100;
 
   test('succeeds', async () => {
-    const peer = new SMPPeer(secret, pid);
+    const peer = new SMPPeer(secret, amount, pid);
     // Register callbacks
     let isDisconnectedCalled = false;
     peer.on('disconnected', () => {
@@ -103,17 +106,22 @@ describe('disconnect', () => {
 });
 
 describe('runSMP', () => {
-  const params = [
-    ['1', '1'],
-    ['1', '2'],
+  const params: [string, string, number, number][] = [
+    ['1', '1', 100, 200],
+    ['1', '1', 100, 90],
+    ['1', '2', 100, 200],
   ];
-  const expectedResults = [true, false];
+  const expectedResults = [
+    { result: true, negotiatedAmount: 100 },
+    { result: true, negotiatedAmount: 90 },
+    { result: false, negotiatedAmount: 0 },
+  ];
 
   test('succeeds', async () => {
     for (const i in params) {
       const param = params[i];
       const expectedResult = expectedResults[i];
-      const actual = await smp(param[0], param[1]);
+      const actual = await smp(param[0], param[1], param[2], param[3]);
       expect(actual).toEqual(expectedResult);
     }
   });
@@ -123,8 +131,8 @@ describe('runSMP', () => {
     let isBobCalled = false;
     const peerIDA = 'A';
     const peerIDB = 'B';
-    const alice = new SMPPeer('1', peerIDA);
-    const bob = new SMPPeer('1', peerIDB);
+    const alice = new SMPPeer('1', 100, peerIDA);
+    const bob = new SMPPeer('1', 100, peerIDB);
 
     alice.on('incoming', (_, __) => {
       isAliceCalled = true;
@@ -151,14 +159,14 @@ describe('runSMP', () => {
   });
 
   test('fails when calling `runSMP` before running `connectToPeerServer`', async () => {
-    const alice = new SMPPeer('1', 'A');
-    const bob = new SMPPeer('1', 'B');
+    const alice = new SMPPeer('1', 100, 'A');
+    const bob = new SMPPeer('1', 100, 'B');
     await bob.connectToPeerServer();
     await expect(alice.runSMP(bob.id)).rejects.toThrowError(ServerUnconnected);
   });
 
   test('fails when the remote peer is not on the peer server', async () => {
-    const alice = new SMPPeer('1', 'A');
+    const alice = new SMPPeer('1', 100, 'A');
     await alice.connectToPeerServer();
     await expect(alice.runSMP('B')).rejects.toThrow();
   });
@@ -169,19 +177,21 @@ describe('runSMP', () => {
     mockPeerClass = MockPeerFakeSend;
     // A timeout smaller than the default one in jest's test.
     const timeout = 1;
-    const alice = new SMPPeer('1', 'A', undefined, timeout);
+    const alice = new SMPPeer('1', 100, 'A', undefined, timeout);
     await alice.connectToPeerServer();
-    const bob = new SMPPeer('1', 'B', undefined, timeout);
+    const bob = new SMPPeer('1', 100, 'B', undefined, timeout);
     await bob.connectToPeerServer();
     await expect(alice.runSMP(bob.id)).rejects.toThrow(TimeoutError);
   });
 });
 
-async function smp(x: string, y: string) {
+// bob is listening incoming SMP
+// SMP succeeds when xAmount is smaller than yAmount
+async function smp(x: string, y: string, xAmount: number, yAmount: number) {
   const peerIDA = 'A';
   const peerIDB = 'B';
-  const alice = new SMPPeer(x, peerIDA);
-  const bob = new SMPPeer(y, peerIDB);
+  const alice = new SMPPeer(x, xAmount, peerIDA);
+  const bob = new SMPPeer(y, yAmount, peerIDB);
   await alice.connectToPeerServer();
   await bob.connectToPeerServer();
   return await alice.runSMP(peerIDB);

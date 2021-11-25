@@ -1,5 +1,5 @@
 {
-  "version": "0.0.9",
+  "version": "0.1.0",
   "license": "MIT",
   "main": "lib/smpPeer.js",
   "types": "lib/smpPeer.d.ts",
@@ -30,16 +30,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mhchia/js-smp-peer.git"
+    "url": "git+https://github.com/tkmct/js-smp-peer.git"
   },
   "bugs": {
-    "url": "https://github.com/mhchia/js-smp-peer/issues"
+    "url": "https://github.com/tkmct/js-smp-peer/issues"
   },
-  "homepage": "https://github.com/mhchia/js-smp-peer#readme",
+  "homepage": "https://github.com/tkmct/js-smp-peer#readme",
   "keywords": [
     "smp"
   ],
-  "name": "js-smp-peer",
+  "name": "js-smp-peer2",
   "author": "mhchia",
   "module": "dist/js-smp-peer.js",
   "devDependencies": {
